@@ -922,9 +922,6 @@ def test_decode_item_length__ignores_bytes_past_the_prefix(
     """
     Truncating the input to `ITEM_LENGTH_PREFIX_MAX` must not change the
     result or the error, for any first byte.
-
-    `decode_joined_encodings` relies on this to avoid copying the whole
-    remaining buffer once per item.
     """
     for first_byte in range(256):
         data = bytes([first_byte]) + filler * extra
@@ -946,34 +943,41 @@ def test_decode_item_length__prefix_max_is_tight() -> None:
         assert _item_length_or_error(data[:-1]) == ("error", ("truncated",))
 
 
-def test_decode_joined_encodings__bounds_the_length_probe(
+def test_decode_joined_encodings__concatenated_items() -> None:
+    items: List[rlp.Simple] = [b"\x11", b"\x22" * 40, [b"\x33"], []]
+    joined = b"".join(rlp.encode(item) for item in items)
+    assert rlp.decode_joined_encodings(joined) == items
+
+
+def test_decode__reads_nested_items_in_place(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """
-    Each item's length must be read from a bounded prefix.
+    Every item, at every level, must be read from the caller's buffer.
 
-    Passing the whole remaining buffer instead copies it once per item,
-    making a sequence decode quadratic in its encoded size. Here that would
-    hand over ~20 kB on the first of 500 items rather than 9 bytes.
+    Copying the remainder once per item makes a wide sequence quadratic in
+    its encoded size, and copying the payload once per level makes a deep
+    one quadratic in its nesting depth.
     """
-    real = rlp.decode_item_length
-    probe_sizes = []
+    real = rlp._decode_item_length
+    buffers = []
 
-    def spy(encoded_data: Bytes) -> int:
-        probe_sizes.append(len(encoded_data))
-        return real(encoded_data)
+    def spy(buffer: Bytes, start: int, end: int) -> int:
+        buffers.append(buffer)
+        return real(buffer, start, end)
 
-    monkeypatch.setattr(rlp, "decode_item_length", spy)
+    monkeypatch.setattr(rlp, "_decode_item_length", spy)
 
     count = 500
-    items = [b"\x11" * 40] * count
-    joined = b"".join(rlp.encode(item) for item in items)
+    depth = 20
+    value: rlp.Simple = [b"\x11" * 40] * count
+    for _ in range(depth):
+        value = [value]
+    encoded = Bytes(rlp.encode(value))
 
-    decoded = rlp.decode_joined_encodings(Bytes(joined))
-
-    assert list(decoded) == items
-    assert len(probe_sizes) == count
-    assert max(probe_sizes) <= rlp.ITEM_LENGTH_PREFIX_MAX
+    assert rlp.decode(encoded) == value
+    assert len(buffers) == count + depth
+    assert all(buffer is encoded for buffer in buffers)
 
 
 @pytest.mark.parametrize("item_size", [55, 56, 255, 256, 65535, 65536])
