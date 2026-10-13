@@ -102,6 +102,13 @@ def encode(raw_data: Extended) -> Bytes:
         )
 
 
+def _encode_length(length: int) -> bytes:
+    """
+    Return `length` as big-endian bytes without leading zeros.
+    """
+    return length.to_bytes((length.bit_length() + 7) // 8, "big")
+
+
 def encode_bytes(raw_bytes: Bytes) -> Bytes:
     """
     Encodes `raw_bytes`, a sequence of bytes, using RLP.
@@ -114,9 +121,7 @@ def encode_bytes(raw_bytes: Bytes) -> Bytes:
         return bytes([0x80 + len_raw_data]) + raw_bytes
     else:
         # length of raw data represented as big endian bytes
-        len_raw_data_as_be = len_raw_data.to_bytes(
-            (len_raw_data.bit_length() + 7) // 8, "big"
-        )
+        len_raw_data_as_be = _encode_length(len_raw_data)
         return (
             bytes([0xB7 + len(len_raw_data_as_be)])
             + len_raw_data_as_be
@@ -136,9 +141,7 @@ def encode_sequence(
     if len_joined_encodings < 0x38:
         return Bytes([0xC0 + len_joined_encodings]) + joined_encodings
     else:
-        len_joined_encodings_as_be = len_joined_encodings.to_bytes(
-            (len_joined_encodings.bit_length() + 7) // 8, "big"
-        )
+        len_joined_encodings_as_be = _encode_length(len_joined_encodings)
         return (
             Bytes([0xF7 + len(len_joined_encodings_as_be)])
             + len_joined_encodings_as_be
