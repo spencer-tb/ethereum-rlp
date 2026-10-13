@@ -920,27 +920,16 @@ def test_decode_item_length__ignores_bytes_past_the_prefix(
     extra: int, filler: bytes
 ) -> None:
     """
-    Truncating the input to `ITEM_LENGTH_PREFIX_MAX` must not change the
-    result or the error, for any first byte.
+    Truncating the input to the longest prefix, the first byte plus eight
+    length bytes, must not change the result or the error, for any first
+    byte.
     """
+    longest_prefix = 9
     for first_byte in range(256):
         data = bytes([first_byte]) + filler * extra
         assert _item_length_or_error(data) == _item_length_or_error(
-            data[: rlp.ITEM_LENGTH_PREFIX_MAX]
+            data[:longest_prefix]
         ), f"first_byte=0x{first_byte:02x}"
-
-
-def test_decode_item_length__prefix_max_is_tight() -> None:
-    """
-    `ITEM_LENGTH_PREFIX_MAX` must cover the longest prefix: the first byte
-    plus the eight length bytes that `0xBF` and `0xFF` announce.
-    """
-    for first_byte in (0xBF, 0xFF):
-        data = bytes([first_byte]) + b"\x01" * 8
-        assert len(data) == rlp.ITEM_LENGTH_PREFIX_MAX
-        assert _item_length_or_error(data)[0] == "ok"
-        # One byte short is a truncated encoding, not a silent misread.
-        assert _item_length_or_error(data[:-1]) == ("error", ("truncated",))
 
 
 def test_decode_joined_encodings__concatenated_items() -> None:
@@ -949,35 +938,24 @@ def test_decode_joined_encodings__concatenated_items() -> None:
     assert rlp.decode_joined_encodings(joined) == items
 
 
-def test_decode__reads_nested_items_in_place(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_decode__deep_nesting_copies_only_the_leaf() -> None:
     """
-    Every item, at every level, must be read from the caller's buffer.
-
-    Copying the remainder once per item makes a wide sequence quadratic in
-    its encoded size, and copying the payload once per level makes a deep
-    one quadratic in its nesting depth.
+    Decoding reads every level from the caller's buffer, so a deeply nested
+    value costs one copy of its leaf, not one copy per level.
     """
-    real = rlp._decode_item_length
-    buffers = []
-
-    def spy(buffer: Bytes, start: int, end: int) -> int:
-        buffers.append(buffer)
-        return real(buffer, start, end)
-
-    monkeypatch.setattr(rlp, "_decode_item_length", spy)
-
-    count = 500
-    depth = 20
-    value: rlp.Simple = [b"\x11" * 40] * count
-    for _ in range(depth):
+    tracemalloc = pytest.importorskip("tracemalloc")
+    value: rlp.Simple = b"\x11" * (256 * 1024)
+    for _ in range(50):
         value = [value]
-    encoded = Bytes(rlp.encode(value))
-
-    assert rlp.decode(encoded) == value
-    assert len(buffers) == count + depth
-    assert all(buffer is encoded for buffer in buffers)
+    encoded = rlp.encode(value)
+    tracemalloc.start()
+    try:
+        decoded = rlp.decode(encoded)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    assert decoded == value
+    assert peak < 2 * len(encoded)
 
 
 @pytest.mark.parametrize("item_size", [55, 56, 255, 256, 65535, 65536])

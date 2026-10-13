@@ -403,6 +403,7 @@ def decode_to_bytes(encoded_bytes: Bytes) -> Bytes:
     Decodes a rlp encoded byte stream assuming that the decoded data
     should be of type `bytes`.
     """
+    # A lone byte below 0x80 decodes to the caller's own object, as before.
     if len(encoded_bytes) == 1 and encoded_bytes[0] < 0x80:
         return encoded_bytes
     return _decode_to_bytes(encoded_bytes, 0, len(encoded_bytes))
@@ -414,15 +415,6 @@ def decode_to_sequence(encoded_sequence: Bytes) -> Sequence[Simple]:
     should be of type `Sequence` of objects.
     """
     return _decode_to_sequence(encoded_sequence, 0, len(encoded_sequence))
-
-
-ITEM_LENGTH_PREFIX_MAX = 9
-"""
-Longest prefix [`decode_item_length`] can read: the first byte, plus at most
-eight more holding a big-endian length.
-
-[`decode_item_length`]: ref:ethereum_rlp.rlp.decode_item_length
-"""
 
 
 def decode_joined_encodings(joined_encodings: Bytes) -> Sequence[Simple]:
