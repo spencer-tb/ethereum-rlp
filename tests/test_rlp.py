@@ -956,12 +956,6 @@ def test_decode_item_length__ignores_bytes_past_the_prefix(
         ), f"first_byte=0x{first_byte:02x}"
 
 
-def test_decode_joined_encodings__concatenated_items() -> None:
-    items: List[rlp.Simple] = [b"\x11", b"\x22" * 40, [b"\x33"], []]
-    joined = b"".join(rlp.encode(item) for item in items)
-    assert rlp.decode_joined_encodings(joined) == items
-
-
 class _CountsCopies(bytes):
     """
     Bytes that count how many bytes are copied by slicing them.
@@ -1020,3 +1014,4 @@ def test_decode_joined_encodings__round_trips_multi_byte_length_prefixes(
         b"\x66" * item_size,
     ]
     assert rlp.decode(rlp.encode(items)) == items
+    assert rlp.decode_joined_encodings(rlp.join_encodings(items)) == items
