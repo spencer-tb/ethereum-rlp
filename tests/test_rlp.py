@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 from typing import (
     Annotated,
+    Any,
     List,
     Mapping,
     NoReturn,
@@ -14,6 +15,7 @@ from typing import (
 import pytest
 from ethereum_types.bytes import Bytes, Bytes1, Bytes4, Bytes32
 from ethereum_types.numeric import U8, U256, Uint
+from typing_extensions import override
 
 from ethereum_rlp import Extended, rlp
 from ethereum_rlp.exceptions import DecodingError, EncodingError
@@ -780,6 +782,28 @@ def test_decode_to_sequence__out_of_bounds_item() -> None:
         rlp.decode_to_sequence(b"\xc1\x81")
 
 
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        # The inner string's two bytes sit after its parent list ends.
+        b"\xc4\xc1\x82\x41\x42",
+        # The length byte of a long string sits after its parent list ends.
+        b"\xc3\xc1\xb8\x00",
+        # The length byte of a long list sits after its parent list ends.
+        b"\xc3\xc1\xf8\x00",
+    ],
+)
+def test_decode__nested_item_cannot_read_past_its_parent(
+    encoded: bytes,
+) -> None:
+    """
+    A nested item that runs past the end of its parent list is truncated,
+    even when the bytes it claims are present later in the input.
+    """
+    with pytest.raises(DecodingError, match="truncated"):
+        rlp.decode(encoded)
+
+
 def test_decode_to_sequence__rejects_trailing_bytes() -> None:
     with pytest.raises(DecodingError, match="trailing"):
         rlp.decode_to_sequence(b"\xc0\x00")
@@ -932,30 +956,45 @@ def test_decode_item_length__ignores_bytes_past_the_prefix(
         ), f"first_byte=0x{first_byte:02x}"
 
 
-def test_decode_joined_encodings__concatenated_items() -> None:
-    items: List[rlp.Simple] = [b"\x11", b"\x22" * 40, [b"\x33"], []]
-    joined = b"".join(rlp.encode(item) for item in items)
-    assert rlp.decode_joined_encodings(joined) == items
+class _CountsCopies(bytes):
+    """
+    Bytes that count how many bytes are copied by slicing them.
+    """
+
+    copied = 0
+
+    @override
+    def __getitem__(self, key: Any) -> Any:
+        item = super().__getitem__(key)
+        if isinstance(key, slice):
+            _CountsCopies.copied += len(item)
+            return _CountsCopies(item)
+        return item
 
 
-def test_decode__deep_nesting_copies_only_the_leaf() -> None:
-    """
-    Decoding reads every level from the caller's buffer, so a deeply nested
-    value costs one copy of its leaf, not one copy per level.
-    """
-    tracemalloc = pytest.importorskip("tracemalloc")
-    value: rlp.Simple = b"\x11" * (256 * 1024)
-    for _ in range(50):
+def _nested(leaf: bytes, depth: int) -> rlp.Simple:
+    value: rlp.Simple = leaf
+    for _ in range(depth):
         value = [value]
+    return value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(_nested(b"\x11" * 1024, 50), id="deep"),
+        pytest.param([b"\x11" * 40] * 5000, id="wide"),
+    ],
+)
+def test_decode__copies_each_byte_once(value: rlp.Simple) -> None:
+    """
+    Decoding copies the input about once, not once per nesting level or
+    once per remaining item.
+    """
     encoded = rlp.encode(value)
-    tracemalloc.start()
-    try:
-        decoded = rlp.decode(encoded)
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    assert decoded == value
-    assert peak < 2 * len(encoded)
+    _CountsCopies.copied = 0
+    assert rlp.decode(_CountsCopies(encoded)) == value
+    assert _CountsCopies.copied < 2 * len(encoded)
 
 
 @pytest.mark.parametrize("item_size", [55, 56, 255, 256, 65535, 65536])
@@ -975,3 +1014,4 @@ def test_decode_joined_encodings__round_trips_multi_byte_length_prefixes(
         b"\x66" * item_size,
     ]
     assert rlp.decode(rlp.encode(items)) == items
+    assert rlp.decode_joined_encodings(rlp.join_encodings(items)) == items

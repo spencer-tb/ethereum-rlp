@@ -403,7 +403,7 @@ def decode_to_bytes(encoded_bytes: Bytes) -> Bytes:
     Decodes a rlp encoded byte stream assuming that the decoded data
     should be of type `bytes`.
     """
-    # A lone byte below 0x80 decodes to the caller's own object, as before.
+    # A lone byte below 0x80 decodes to the caller's own object.
     if len(encoded_bytes) == 1 and encoded_bytes[0] < 0x80:
         return encoded_bytes
     return _decode_to_bytes(encoded_bytes, 0, len(encoded_bytes))
