@@ -2,6 +2,7 @@ import re
 from dataclasses import dataclass
 from typing import (
     Annotated,
+    Any,
     List,
     Mapping,
     NoReturn,
@@ -14,6 +15,7 @@ from typing import (
 import pytest
 from ethereum_types.bytes import Bytes, Bytes1, Bytes4, Bytes32
 from ethereum_types.numeric import U8, U256, Uint
+from typing_extensions import override
 
 from ethereum_rlp import Extended, rlp
 from ethereum_rlp.exceptions import DecodingError, EncodingError
@@ -960,24 +962,45 @@ def test_decode_joined_encodings__concatenated_items() -> None:
     assert rlp.decode_joined_encodings(joined) == items
 
 
-def test_decode__deep_nesting_copies_only_the_leaf() -> None:
+class _CountsCopies(bytes):
     """
-    Decoding reads every level from the caller's buffer, so a deeply nested
-    value costs one copy of its leaf, not one copy per level.
+    Bytes that count how many bytes are copied by slicing them.
     """
-    tracemalloc = pytest.importorskip("tracemalloc")
-    value: rlp.Simple = b"\x11" * (256 * 1024)
-    for _ in range(50):
+
+    copied = 0
+
+    @override
+    def __getitem__(self, key: Any) -> Any:
+        item = super().__getitem__(key)
+        if isinstance(key, slice):
+            _CountsCopies.copied += len(item)
+            return _CountsCopies(item)
+        return item
+
+
+def _nested(leaf: bytes, depth: int) -> rlp.Simple:
+    value: rlp.Simple = leaf
+    for _ in range(depth):
         value = [value]
+    return value
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param(_nested(b"\x11" * 1024, 50), id="deep"),
+        pytest.param([b"\x11" * 40] * 5000, id="wide"),
+    ],
+)
+def test_decode__copies_each_byte_once(value: rlp.Simple) -> None:
+    """
+    Decoding copies the input about once, not once per nesting level or
+    once per remaining item.
+    """
     encoded = rlp.encode(value)
-    tracemalloc.start()
-    try:
-        decoded = rlp.decode(encoded)
-        _, peak = tracemalloc.get_traced_memory()
-    finally:
-        tracemalloc.stop()
-    assert decoded == value
-    assert peak < 2 * len(encoded)
+    _CountsCopies.copied = 0
+    assert rlp.decode(_CountsCopies(encoded)) == value
+    assert _CountsCopies.copied < 2 * len(encoded)
 
 
 @pytest.mark.parametrize("item_size", [55, 56, 255, 256, 65535, 65536])
