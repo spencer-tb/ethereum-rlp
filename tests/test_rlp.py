@@ -780,6 +780,28 @@ def test_decode_to_sequence__out_of_bounds_item() -> None:
         rlp.decode_to_sequence(b"\xc1\x81")
 
 
+@pytest.mark.parametrize(
+    "encoded",
+    [
+        # The inner string's two bytes sit after its parent list ends.
+        b"\xc4\xc1\x82\x41\x42",
+        # The length byte of a long string sits after its parent list ends.
+        b"\xc3\xc1\xb8\x00",
+        # The length byte of a long list sits after its parent list ends.
+        b"\xc3\xc1\xf8\x00",
+    ],
+)
+def test_decode__nested_item_cannot_read_past_its_parent(
+    encoded: bytes,
+) -> None:
+    """
+    A nested item that runs past the end of its parent list is truncated,
+    even when the bytes it claims are present later in the input.
+    """
+    with pytest.raises(DecodingError, match="truncated"):
+        rlp.decode(encoded)
+
+
 def test_decode_to_sequence__rejects_trailing_bytes() -> None:
     with pytest.raises(DecodingError, match="trailing"):
         rlp.decode_to_sequence(b"\xc0\x00")
